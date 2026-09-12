@@ -1,5 +1,6 @@
-transformers>=5.42.1
+transformers>=5.0.0,<6.0.0
 llmcompressor
 compressed-tensors
 datasets
 torch
+accelerate

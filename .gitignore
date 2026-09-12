@@ -1,0 +1,29 @@
+# Local Python environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Jupyter temporary files
+.ipynb_checkpoints/
+
+# Local model artifacts and generated outputs
+models/
+.hf-cache/
+
+# Operating system files
+.DS_Store
+Thumbs.db
