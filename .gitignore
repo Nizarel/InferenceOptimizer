@@ -1,5 +1,6 @@
 # Local Python environments
 .venv/
+.venv-1/
 venv/
 env/
 ENV/
@@ -23,6 +24,7 @@ dist/
 # Local model artifacts and generated outputs
 models/
 .hf-cache/
+Compressor/benchmark_results/
 
 # Operating system files
 .DS_Store

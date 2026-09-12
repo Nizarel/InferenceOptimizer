@@ -3,4 +3,5 @@ llmcompressor
 compressed-tensors
 datasets
 torch
+matplotlib
 accelerate
