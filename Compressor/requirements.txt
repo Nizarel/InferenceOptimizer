@@ -1,0 +1,5 @@
+transformers>=5.42.1
+llmcompressor
+compressed-tensors
+datasets
+torch
