@@ -3,6 +3,10 @@
 Learn LLM inference optimization through the hands-on
 [step-by-step tutorial](basic/Docs/inference-optimization-tutorial.md).
 
+For a mechanism-first explanation of token-by-token generation, causal
+attention, grouped-query attention, prefill, and KV-cache decode, see the
+[L2 inference fundamentals guide](SGLang/L2.md).
+
 See the completed [vLLM serving benchmark report](basic/Docs/reports/vllm-serving-benchmark.md)
 for the BF16, GPTQ, AWQ, and FP8 comparison, raw result location, and the
 two-DGX results covering both independent replicas and cross-node model splitting.

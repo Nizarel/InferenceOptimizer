@@ -1,3 +1,19 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, Cache
+from transformers.modeling_outputs import CausalLMOutputWithPast
+
+
+MODEL_CACHE = Path(__file__).resolve().parent.parent / ".hf-cache"
+os.environ.setdefault("HF_HOME", str(MODEL_CACHE))
+os.environ.setdefault("HF_XET_CACHE", str(MODEL_CACHE / "xet"))
+
+
 class TinyLLM:
     """Memory-optimized wrapper for causal language models.
     
@@ -8,7 +24,7 @@ class TinyLLM:
     - KV cache support for optimized inference
     
     Memory optimizations implemented:
-    - Uses float16 by default (50% memory reduction vs float32)
+    - Uses bfloat16 weights (50% memory reduction vs float32)
     - Automatic device placement with device_map="auto"
     - inference_mode() context for all forward passes (disables autograd)
     - Explicit memory cleanup in critical paths
@@ -21,26 +37,35 @@ class TinyLLM:
             model_path: HuggingFace model ID or local path
         
         Memory notes:
-        - float16 reduces memory by ~50% compared to float32
+        - bfloat16 reduces memory by ~50% compared to float32
         - device_map="auto" optimally distributes model across available devices
         - eval() mode disables dropout and other training-only layers
         """
+        if not torch.cuda.is_available():
+            raise RuntimeError("This lesson requires a CUDA-capable GPU.")
+
+        MODEL_CACHE.mkdir(parents=True, exist_ok=True)
         self.model_path: str = model_path
 
         # Initialize tokenizer (lightweight, negligible memory)
-        self.tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(model_path)
+        self.tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            cache_dir=MODEL_CACHE,
+        )
 
         # Load model with memory optimizations:
-        # 1. torch_dtype=torch.float16 - Uses half precision (2 bytes vs 4 bytes per param)
+        # 1. dtype=torch.bfloat16 - Uses 16-bit weights (2 bytes vs 4 bytes per param)
         #    For 1.5B model: ~3GB instead of ~6GB
         # 2. device_map="auto" - Automatically places layers across GPU/CPU
         #    If GPU memory is limited, overflow to CPU RAM
         # 3. low_cpu_mem_usage=True - Loads model in parts to reduce peak RAM
         self.model: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(
             model_path,
-            torch_dtype=torch.float16,  # Half precision for memory efficiency
-            device_map="auto",          # Smart device placement
-            low_cpu_mem_usage=True      # Minimize CPU RAM during loading
+            cache_dir=MODEL_CACHE,
+            dtype=torch.bfloat16,
+            device_map="auto",
+            low_cpu_mem_usage=True,
+            attn_implementation="sdpa",
         )
         
         # Set to evaluation mode
@@ -51,11 +76,11 @@ class TinyLLM:
         # Store device for convenience
         self.device: torch.device = next(self.model.parameters()).device
         
-        print(f"✅ Model loaded on {self.device}")
+        print(f"Model loaded on {self.device}")
         if torch.cuda.is_available():
             allocated = torch.cuda.memory_allocated() / 1e9
             reserved = torch.cuda.memory_reserved() / 1e9
-            print(f"💾 GPU Memory: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
+            print(f"GPU memory: {allocated:.2f} GB allocated, {reserved:.2f} GB reserved")
 
     @torch.inference_mode()  # More efficient than no_grad() - disables view tracking
     def generate_std(
@@ -82,14 +107,14 @@ class TinyLLM:
         # Tokenize and move to model's device in one step
         # return_tensors="pt" creates PyTorch tensors
         # .to(self.device) moves to GPU/CPU without creating unnecessary copies
-        input_ids: torch.Tensor = self.tokenizer(
+        inputs = self.tokenizer(
             input_text,
-            return_tensors="pt"
-        ).input_ids.to(self.device)
+            return_tensors="pt",
+        ).to(self.device)
 
         # Generate with memory-efficient settings
         output_ids: torch.Tensor = self.model.generate(
-            input_ids,
+            **inputs,
             max_new_tokens=max_new_tokens,
             temperature=temperature if temperature > 0 else None,
             do_sample=temperature > 0,  # Only sample if temperature > 0
@@ -103,12 +128,6 @@ class TinyLLM:
             output_ids[0],
             skip_special_tokens=True
         )
-        
-        # Memory cleanup: delete tensors when done
-        # This is especially important in loops or repeated calls
-        del input_ids, output_ids
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()  # Release unused cached memory
         
         return output_text
 
@@ -163,7 +182,10 @@ class TinyLLM:
 
         # Forward pass
         # We only need logits, not past_key_values or other outputs
-        outputs: CausalLMOutputWithPast = self.model(input_tensor)
+        outputs: CausalLMOutputWithPast = self.model(
+            input_tensor,
+            use_cache=False,
+        )
         
         # Extract logits for the last position only
         # Shape: [1, seq_len, vocab_size] -> [1, vocab_size]
@@ -179,8 +201,8 @@ class TinyLLM:
     def forward_raw_with_kv_cache(
         self,
         input_ids: List[int],
-        past_key_values: Optional[Tuple] = None
-    ) -> Tuple[torch.Tensor, Tuple]:
+        past_key_values: Optional[Cache] = None
+    ) -> Tuple[torch.Tensor, Cache]:
         """Forward pass with KV cache support for efficient generation.
         
         Args:
@@ -194,7 +216,7 @@ class TinyLLM:
         - KV cache stores attention states, avoiding recomputation
         - Cache grows linearly with sequence length
         - For long sequences, cache can be larger than model weights!
-        - We use float16 cache to reduce memory by 50%
+        - The cache follows the model's bfloat16 dtype to reduce memory by 50%
         """
         # Convert to tensor
         input_tensor: torch.Tensor = torch.tensor(
@@ -214,7 +236,9 @@ class TinyLLM:
         
         # Extract results
         next_token_logits: torch.Tensor = outputs.logits[:, -1, :]
-        new_cache: Tuple = outputs.past_key_values
+        new_cache = outputs.past_key_values
+        if new_cache is None:
+            raise RuntimeError("The model did not return a KV cache.")
         
         # Cleanup input tensor (cache is returned, so keep it)
         del input_tensor, outputs
