@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 from pathlib import Path
 
 
@@ -16,6 +17,34 @@ def flatten(value, prefix=""):
             output.update(flatten(item, child))
         return output
     return {prefix: value}
+
+
+BENCH_NAME = re.compile(r"bench_c(?P<concurrency>\d+)_s(?P<seed>\d+)")
+PHASE_DIRS = {"phase_b": "phase_b", "phase_c": "phase_c"}
+STAGES = {"smoke", "sweep"}
+
+
+def describe(relative: Path, absolute: Path) -> dict:
+    """Derive phase/config/stage/concurrency/seed from the artifact's path."""
+    parts = relative.parts
+    info = {"phase": "phase_a", "config": "", "stage": "", "concurrency": "", "seed": ""}
+    # Phase comes from the absolute path: collect may be rooted inside the phase directory,
+    # in which case the phase name is not part of the relative path at all.
+    for part in absolute.parts:
+        if part in PHASE_DIRS:
+            info["phase"] = PHASE_DIRS[part]
+    directories = [part for part in parts[:-1] if part not in PHASE_DIRS]
+    if directories:
+        if directories[-1] in STAGES:
+            info["stage"] = directories[-1]
+            directories = directories[:-1]
+        if directories:
+            info["config"] = directories[-1]
+    match = BENCH_NAME.search(relative.name)
+    if match:
+        info["concurrency"] = match.group("concurrency")
+        info["seed"] = match.group("seed")
+    return info
 
 
 def collect(root: Path):
@@ -32,7 +61,9 @@ def collect(root: Path):
         if not isinstance(data, dict):
             continue
         row = flatten(data)
-        row["artifact"] = str(path.relative_to(root))
+        relative = path.relative_to(root)
+        row["artifact"] = str(relative)
+        row.update(describe(relative, path.resolve()))
         rows.append(row)
     return rows
 

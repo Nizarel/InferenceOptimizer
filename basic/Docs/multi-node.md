@@ -5,6 +5,15 @@ canonical: "https://build.nvidia.com/spark/vllm/multi-node.md"
 
 # Multi-node serving
 
+> **This repository's Phase C runbook is [multi-node-phase-c.md](multi-node-phase-c.md).** It documents the
+> automated two-node procedure actually used here, including the Ray-free `mp` backend, pipeline
+> parallelism, and why RDMA/RoCE could not be used on these nodes (NCCL falls back to TCP over the
+> same QSFP link). It deliberately keeps `vllm/vllm-openai:latest` rather than
+> the `nvcr.io/nvidia/vllm:26.05-py3` image pinned below, to stay comparable with Phases A and B.
+>
+> Note that the tensor-parallel topology this page describes measured **worse than a single node** at
+> every concurrency level tested, for a model that fits on one GPU. See section 13 of the runbook.
+
 Serve models larger than a single node can hold by pooling GPUs across multiple **multi-node capable hardware** systems with a Ray cluster and tensor parallelism. Two topologies are covered:
 
 - **Two nodes (direct QSFP cable)** — connect two nodes back-to-back.  

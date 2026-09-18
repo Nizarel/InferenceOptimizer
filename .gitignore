@@ -25,6 +25,7 @@ dist/
 models/
 .hf-cache/
 Compressor/benchmark_results/
+Serving/outputs/
 
 # Operating system files
 .DS_Store
