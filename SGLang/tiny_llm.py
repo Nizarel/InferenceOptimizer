@@ -25,24 +25,35 @@ class TinyLLM:
     
     Memory optimizations implemented:
     - Uses bfloat16 weights (50% memory reduction vs float32)
-    - Automatic device placement with device_map="auto"
+    - Explicit placement of the entire model on one CUDA device
     - inference_mode() context for all forward passes (disables autograd)
     - Explicit memory cleanup in critical paths
     """
     
-    def __init__(self, model_path: str) -> None:
+    def __init__(
+        self,
+        model_path: str,
+        device: str | torch.device = "cuda",
+    ) -> None:
         """Initialize the TinyLLM with a pre-trained model.
         
         Args:
             model_path: HuggingFace model ID or local path
+            device: CUDA device used for the entire model
         
         Memory notes:
         - bfloat16 reduces memory by ~50% compared to float32
-        - device_map="auto" optimally distributes model across available devices
+        - Explicit device mapping prevents silent CPU offload
         - eval() mode disables dropout and other training-only layers
         """
         if not torch.cuda.is_available():
             raise RuntimeError("This lesson requires a CUDA-capable GPU.")
+
+        target_device = torch.device(device)
+        if target_device.type != "cuda":
+            raise ValueError("TinyLLM only supports CUDA devices.")
+        if target_device.index is None:
+            target_device = torch.device("cuda", torch.cuda.current_device())
 
         MODEL_CACHE.mkdir(parents=True, exist_ok=True)
         self.model_path: str = model_path
@@ -56,14 +67,13 @@ class TinyLLM:
         # Load model with memory optimizations:
         # 1. dtype=torch.bfloat16 - Uses 16-bit weights (2 bytes vs 4 bytes per param)
         #    For 1.5B model: ~3GB instead of ~6GB
-        # 2. device_map="auto" - Automatically places layers across GPU/CPU
-        #    If GPU memory is limited, overflow to CPU RAM
+        # 2. device_map - Keeps every layer on the selected GPU
         # 3. low_cpu_mem_usage=True - Loads model in parts to reduce peak RAM
         self.model: AutoModelForCausalLM = AutoModelForCausalLM.from_pretrained(
             model_path,
             cache_dir=MODEL_CACHE,
             dtype=torch.bfloat16,
-            device_map="auto",
+            device_map={"": str(target_device)},
             low_cpu_mem_usage=True,
             attn_implementation="sdpa",
         )
@@ -75,6 +85,11 @@ class TinyLLM:
         
         # Store device for convenience
         self.device: torch.device = next(self.model.parameters()).device
+        parameter_devices = {parameter.device.type for parameter in self.model.parameters()}
+        if parameter_devices != {"cuda"}:
+            raise RuntimeError(
+                f"Expected all model parameters on CUDA, found {parameter_devices}."
+            )
         
         print(f"Model loaded on {self.device}")
         if torch.cuda.is_available():
@@ -106,7 +121,7 @@ class TinyLLM:
         """
         # Tokenize and move to model's device in one step
         # return_tensors="pt" creates PyTorch tensors
-        # .to(self.device) moves to GPU/CPU without creating unnecessary copies
+        # .to(self.device) moves inputs to the GPU without unnecessary copies
         inputs = self.tokenizer(
             input_text,
             return_tensors="pt",
